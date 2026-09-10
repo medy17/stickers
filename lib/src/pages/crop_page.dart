@@ -8,18 +8,21 @@ import 'package:stickers/generated/intl/app_localizations.dart';
 import 'package:stickers/src/checker_painter.dart';
 import 'package:stickers/src/data/load_store.dart';
 import 'package:stickers/src/data/sticker_pack.dart';
+import 'package:stickers/src/dialogs/error_dialog.dart';
 import 'package:stickers/src/pages/default_page.dart';
 
 class CropPage extends StatefulWidget {
   final StickerPack pack;
   final int index;
   final String imagePath;
+  final bool returnCrop;
   final GlobalKey<ExtendedImageEditorState> editorKey = GlobalKey<ExtendedImageEditorState>();
 
   CropPage({
     required this.pack,
     required this.index,
     required this.imagePath,
+    this.returnCrop = false,
     super.key,
   });
 
@@ -34,6 +37,7 @@ class _CropPageState extends State<CropPage> with TickerProviderStateMixin {
   final ImageEditorController _editorController = ImageEditorController();
 
   bool _previousPtrVal = false;
+  bool _saving = false;
 
   @override
   void initState() {
@@ -58,6 +62,57 @@ class _CropPageState extends State<CropPage> with TickerProviderStateMixin {
   }
 
   double? _aspectRatio;
+
+  Future<void> _finishCrop() async {
+    if (_saving) return;
+    if (widget.editorKey.currentState == null) return;
+    final state = widget.editorKey.currentState!;
+    if (state.getCropRect() == null) return;
+    if (state.getCropRect()!.height < .5 || state.getCropRect()!.width < .5) {
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(AppLocalizations.of(context)!.cropTooSmall),
+          content: Text(AppLocalizations.of(context)!.cropTooSmallDetails),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(context).pop(), child: Text("Okay 💗")),
+            FilledButton(onPressed: () => Navigator.of(context).pop(), child: Text("Yay 💗")),
+          ],
+        ),
+      );
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      final cropped = await cropSticker(
+        state.getCropRect()!,
+        state.rawImageData,
+        widget.pack,
+        widget.index,
+        _editorController.rotateDegrees,
+      );
+      if (!mounted) return;
+      if (widget.returnCrop) {
+        Navigator.of(context).pop(cropped);
+        return;
+      }
+      final output = await saveTemp(cropped);
+      if (!mounted) return;
+      Navigator.of(context).pushNamed(
+        "/edit",
+        arguments: EditArguments(pack: widget.pack, index: widget.index, mediaPath: output.path),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (_) =>
+            ErrorDialog(title: AppLocalizations.of(context)!.couldntExportSticker, message: error.toString()),
+      );
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -215,44 +270,10 @@ class _CropPageState extends State<CropPage> with TickerProviderStateMixin {
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
                       child: FilledButton(
-                        onPressed: () async {
-                          final state = widget.editorKey.currentState!;
-                          if (state.getCropRect()!.height < .5 || state.getCropRect()!.width < .5) {
-                            showDialog(
-                                context: context,
-                                builder: (ctx) => AlertDialog(
-                                      title: Text(AppLocalizations.of(context)!.cropTooSmall),
-                                      content:
-                                          Text(AppLocalizations.of(context)!.cropTooSmallDetails),
-                                      actions: [
-                                        TextButton(
-                                            onPressed: () => Navigator.of(context).pop(),
-                                            child: Text("Okay 💗")),
-                                        FilledButton(
-                                            onPressed: () => Navigator.of(context).pop(),
-                                            child: Text("Yay 💗")),
-                                      ],
-                                    ));
-                            return;
-                          }
-                          final cropped = await cropSticker(
-                              state.getCropRect()!,
-                              state.rawImageData,
-                              widget.pack,
-                              widget.index,
-                              _editorController.rotateDegrees);
-                          final output = await saveTemp(cropped);
-                          if (!context.mounted) return;
-                          Navigator.of(context).pushNamed(
-                            "/edit",
-                            arguments: EditArguments(
-                              pack: widget.pack,
-                              index: widget.index,
-                              mediaPath: output.path,
-                            ),
-                          );
-                        },
-                        child: Text(AppLocalizations.of(context)!.done),
+                        onPressed: _saving ? null : _finishCrop,
+                        child: Text(widget.returnCrop
+                            ? AppLocalizations.of(context)!.saveCrop
+                            : AppLocalizations.of(context)!.done),
                       ),
                     ),
                   ],
